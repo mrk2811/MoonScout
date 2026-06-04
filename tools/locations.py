@@ -133,32 +133,65 @@ def _is_coordinate(s: str) -> bool:
 
 
 def _query_overpass(lat: float, lon: float, radius_meters: float) -> list:
-    """Query Overpass API for observation-friendly locations."""
-    # Search for viewpoints, peaks, hills, large parks, open areas
-    query = (
+    """Query Overpass API for observation-friendly locations.
+
+    Uses a two-phase approach: lightweight node query first, then ways
+    if more results are needed. Includes retry with backoff for 429 errors.
+    """
+    # Phase 1: Lightweight node-only query (viewpoints, peaks, hills)
+    node_query = (
         f'[out:json][timeout:30];'
         f'('
         f'node["tourism"="viewpoint"](around:{radius_meters},{lat},{lon});'
         f'node["natural"="peak"](around:{radius_meters},{lat},{lon});'
         f'node["natural"="hill"](around:{radius_meters},{lat},{lon});'
         f'node["natural"="saddle"](around:{radius_meters},{lat},{lon});'
-        f'way["leisure"="park"]["name"](around:{radius_meters},{lat},{lon});'
-        f'way["leisure"="nature_reserve"]["name"](around:{radius_meters},{lat},{lon});'
-        f'way["natural"="heath"](around:{radius_meters},{lat},{lon});'
-        f'node["man_made"="tower"]["tower:type"="observation"](around:{radius_meters},{lat},{lon});'
         f');'
-        f'out center body 20;'
+        f'out body 20;'
     )
 
-    try:
-        response = requests.post(
-            _OVERPASS_BASE,
-            data={"data": query},
-            headers=_HEADERS,
-            timeout=35
+    candidates = _run_overpass_query(node_query)
+
+    # Phase 2: If we have fewer than 5 results, also search for parks/reserves
+    if len(candidates) < 5:
+        time.sleep(1)  # Rate limit pause between queries
+        way_query = (
+            f'[out:json][timeout:30];'
+            f'('
+            f'way["leisure"="park"]["name"](around:{radius_meters},{lat},{lon});'
+            f'way["leisure"="nature_reserve"]["name"](around:{radius_meters},{lat},{lon});'
+            f');'
+            f'out center body 10;'
         )
-        response.raise_for_status()
-        data = response.json()
+        way_candidates = _run_overpass_query(way_query)
+        candidates.extend(way_candidates)
+
+    return candidates
+
+
+def _run_overpass_query(query: str, max_retries: int = 3) -> list:
+    """Execute an Overpass query with retry and backoff for rate limits."""
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                _OVERPASS_BASE,
+                data={"data": query},
+                headers=_HEADERS,
+                timeout=45
+            )
+
+            if response.status_code == 429:
+                wait_time = (attempt + 1) * 10  # 10s, 20s, 30s backoff
+                time.sleep(wait_time)
+                continue
+
+            response.raise_for_status()
+            data = response.json()
+        except (requests.RequestException, ValueError):
+            if attempt < max_retries - 1:
+                time.sleep((attempt + 1) * 5)
+                continue
+            return []
 
         candidates = []
         for element in data.get("elements", []):
@@ -191,8 +224,7 @@ def _query_overpass(lat: float, lon: float, radius_meters: float) -> list:
 
         return candidates
 
-    except (requests.RequestException, ValueError):
-        return []
+    return []
 
 
 def _query_overpass_fallback(lat: float, lon: float, radius_meters: float) -> list:
@@ -206,39 +238,7 @@ def _query_overpass_fallback(lat: float, lon: float, radius_meters: float) -> li
         f');'
         f'out center body 10;'
     )
-
-    try:
-        response = requests.post(
-            _OVERPASS_BASE,
-            data={"data": query},
-            headers=_HEADERS,
-            timeout=30
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        candidates = []
-        for element in data.get("elements", []):
-            name = element.get("tags", {}).get("name", "Unnamed Park")
-            center = element.get("center", {})
-            c_lat = center.get("lat", element.get("lat"))
-            c_lon = center.get("lon", element.get("lon"))
-
-            if c_lat is None or c_lon is None:
-                continue
-
-            candidates.append({
-                "name": name,
-                "lat": c_lat,
-                "lon": c_lon,
-                "type": "park",
-                "elevation_m": None
-            })
-
-        return candidates
-
-    except (requests.RequestException, ValueError):
-        return []
+    return _run_overpass_query(query)
 
 
 def _get_location_type(tags: dict) -> str:
