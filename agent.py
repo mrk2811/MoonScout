@@ -49,6 +49,23 @@ def _azimuth_to_compass(azimuth: float) -> str:
     return directions[idx]
 
 
+def _cloud_sky_condition(cloud_pct) -> str:
+    """Return a human-readable sky condition from cloud coverage percentage."""
+    try:
+        pct = float(cloud_pct)
+    except (TypeError, ValueError):
+        return "unknown"
+    if pct <= 10:
+        return "Clear skies — excellent for viewing"
+    if pct <= 30:
+        return "Mostly clear — good for viewing"
+    if pct <= 60:
+        return "Partly cloudy — fair, crescent may be intermittently hidden"
+    if pct <= 90:
+        return "Mostly cloudy — poor, crescent will be hard to spot"
+    return "Overcast — crescent likely hidden behind clouds"
+
+
 # --- LLM Setup ---
 
 def _get_llm():
@@ -304,7 +321,7 @@ def score_locations(state: MoonScoutState) -> dict:
     return {
         "scored_results": scored[:3],  # Top 3
         "status_updates": state.get("status_updates", []) + [
-            f"Scored {len(scored)} locations. Top score: {scored[0]['total_score']:.3f}" if scored else "No scoreable locations."
+            f"Scored {len(scored)} locations. Top score: {scored[0]['total_score'] * 10:.1f}/10" if scored else "No scoreable locations."
         ]
     }
 
@@ -331,17 +348,19 @@ def generate_response(state: MoonScoutState) -> dict:
     for i, r in enumerate(scored_results, 1):
         weather = r["weather"]
         components = r["score"]["components"]
+        cloud_pct = weather.get('cloud_cover_pct', 'N/A')
+        sky_condition = _cloud_sky_condition(cloud_pct)
         results_text += f"""
 Location #{i}: {r['name']}
 - Type: {r['type']} | Elevation: {r['elevation_m']}m
 - Distance from user: {r.get('distance_miles', 'N/A')} miles
 - Coordinates: {r['lat']:.4f}, {r['lon']:.4f}
-- Total Score: {r['total_score']:.3f}/1.000
-- Crescent Visibility Score: {components['crescent_visibility']:.2f}
-- Horizon Clarity Score: {components['horizon_clarity']:.2f}
-- Elevation Score: {components['elevation']:.2f}
-- Lag Time Score: {components['lag_time']:.2f}
-- Cloud Cover: {weather.get('cloud_cover_pct', 'N/A')}% (0%=clear, 100%=overcast)
+- Total Score: {r['total_score'] * 10:.1f}/10
+- Crescent Visibility Score: {components['crescent_visibility'] * 10:.1f}/10
+- Horizon Clarity Score: {components['horizon_clarity'] * 10:.1f}/10
+- Elevation Score: {components['elevation'] * 10:.1f}/10
+- Lag Time Score: {components['lag_time'] * 10:.1f}/10
+- Cloud Coverage: {cloud_pct}% — {sky_condition}
 - Humidity: {weather.get('humidity_pct', 'N/A')}% (high humidity=haze near horizon)
 - Atmospheric Visibility: {weather.get('visibility_km', 'N/A')} km (how far you can see)
 """
@@ -383,8 +402,8 @@ Top {len(scored_results)} locations:
 Write a clear, engaging response that:
 1. Briefly summarizes the moon conditions for that evening
 2. Tell the user EXACTLY where to look: direction ({compass}, azimuth ~{moon_azimuth}°), how high above the horizon ({moon_data.get('moon_altitude_at_sunset', 'N/A')}°), and the observation window (from sunset until {moon_data.get('lag_time_minutes', 'N/A')} minutes later when the moon sets)
-3. Presents each location as a ranked recommendation (#1, #2, #3). Include: name, distance from user, score, cloud cover, humidity, and 1-2 sentences explaining the ranking
-4. Explain what the numbers mean in plain language (e.g., "cloud cover 97% means almost fully overcast", "score of 0.83 out of 1.0 means very good conditions")
+3. Presents each location as a ranked recommendation (#1, #2, #3). Include: name, distance from user, score (out of 10), cloud coverage with sky condition, humidity, and 1-2 sentences explaining the ranking
+4. Explain what the numbers mean in plain language (e.g., "cloud coverage 97% means the sky is almost completely covered by clouds — the crescent will likely be hidden", "score of 8.3 out of 10 means very good conditions")
 5. End with a practical tip for crescent observation
 
 Keep it informative but concise. Use plain language suitable for someone new to moon observation."""
