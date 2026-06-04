@@ -2,7 +2,7 @@
 
 import os
 from datetime import datetime
-from typing import TypedDict, Annotated, Optional
+from typing import TypedDict, Optional
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI

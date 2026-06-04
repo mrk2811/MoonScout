@@ -175,7 +175,7 @@ if search_clicked and query:
         st.error(f"Configuration error: {e}")
         st.info("Make sure your `.env` file has a valid `OPENAI_API_KEY`.")
 
-    except Exception as e:
+    except Exception:
         status_container.empty()
         progress_bar.empty()
         st.error("Something went wrong while scouting locations.")

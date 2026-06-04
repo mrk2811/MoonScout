@@ -1,6 +1,5 @@
 """Moon data tool using Skyfield for crescent visibility calculations."""
 
-import os
 from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path

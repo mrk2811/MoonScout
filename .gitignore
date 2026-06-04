@@ -26,3 +26,4 @@ data/*.pck
 # OS
 .DS_Store
 Thumbs.db
+streamlit_ui.png

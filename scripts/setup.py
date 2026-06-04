@@ -37,7 +37,6 @@ def main():
         print("  [OK] Timescale data (leap seconds) downloaded")
 
         # Verify it works
-        from skyfield.almanac import moon_phases
         from skyfield.api import wgs84
         t = ts.now()
         earth = eph["earth"]

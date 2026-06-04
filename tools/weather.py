@@ -1,7 +1,7 @@
 """Weather tool using Open-Meteo API focused on sunset-time conditions."""
 
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 
@@ -53,7 +53,6 @@ def get_weather(lat: float, lon: float, date: str, sunset_hour: int = 19) -> dic
         data = response.json()
 
         hourly = data.get("hourly", {})
-        times = hourly.get("time", [])
         cloud_cover = hourly.get("cloud_cover", [])
         cloud_cover_low = hourly.get("cloud_cover_low", [])
         humidity = hourly.get("relative_humidity_2m", [])
