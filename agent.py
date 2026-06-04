@@ -11,7 +11,7 @@ from langgraph.graph import StateGraph, END
 
 from tools.weather import get_weather
 from tools.moon import get_moon_data, find_next_visible_date
-from tools.locations import find_candidate_locations, geocode_location
+from tools.locations import find_candidate_locations, geocode_location, _approx_distance_km
 from scoring import score_location
 
 load_dotenv()
@@ -33,6 +33,20 @@ class MoonScoutState(TypedDict):
     final_response: Optional[str]
     error: Optional[str]
     status_updates: list
+
+
+# --- Helpers ---
+
+def _azimuth_to_compass(azimuth: float) -> str:
+    """Convert azimuth degrees to a compass direction string."""
+    directions = [
+        "north", "north-northeast", "northeast", "east-northeast",
+        "east", "east-southeast", "southeast", "south-southeast",
+        "south", "south-southwest", "southwest", "west-southwest",
+        "west", "west-northwest", "northwest", "north-northwest",
+    ]
+    idx = round(azimuth / 22.5) % 16
+    return directions[idx]
 
 
 # --- LLM Setup ---
@@ -263,12 +277,22 @@ def score_locations(state: MoonScoutState) -> dict:
             max_elevation_m=max_elev if max_elev > 0 else 500
         )
 
+        # Calculate distance from user's location
+        center_lat = state.get("center_lat", 0)
+        center_lon = state.get("center_lon", 0)
+        distance_km = _approx_distance_km(
+            center_lat, center_lon,
+            candidate["lat"], candidate["lon"]
+        )
+        distance_miles = round(distance_km * 0.621371, 1)
+
         scored.append({
             "name": candidate["name"],
             "lat": candidate["lat"],
             "lon": candidate["lon"],
             "type": candidate.get("type", "location"),
             "elevation_m": candidate.get("elevation_m", 0),
+            "distance_miles": distance_miles,
             "weather": weather,
             "score": score_result,
             "total_score": score_result["total_score"]
@@ -310,36 +334,58 @@ def generate_response(state: MoonScoutState) -> dict:
         results_text += f"""
 Location #{i}: {r['name']}
 - Type: {r['type']} | Elevation: {r['elevation_m']}m
+- Distance from user: {r.get('distance_miles', 'N/A')} miles
 - Coordinates: {r['lat']:.4f}, {r['lon']:.4f}
 - Total Score: {r['total_score']:.3f}/1.000
 - Crescent Visibility Score: {components['crescent_visibility']:.2f}
 - Horizon Clarity Score: {components['horizon_clarity']:.2f}
 - Elevation Score: {components['elevation']:.2f}
 - Lag Time Score: {components['lag_time']:.2f}
-- Cloud Cover: {weather.get('cloud_cover_pct', 'N/A')}%
-- Humidity: {weather.get('humidity_pct', 'N/A')}%
-- Visibility: {weather.get('visibility_km', 'N/A')} km
+- Cloud Cover: {weather.get('cloud_cover_pct', 'N/A')}% (0%=clear, 100%=overcast)
+- Humidity: {weather.get('humidity_pct', 'N/A')}% (high humidity=haze near horizon)
+- Atmospheric Visibility: {weather.get('visibility_km', 'N/A')} km (how far you can see)
 """
+
+    # Determine if user is in an urban area (for obstruction warning)
+    is_urban = any(kw in location_name.lower() for kw in [
+        "nyc", "new york", "manhattan", "chicago", "london", "tokyo",
+        "dubai", "mumbai", "karachi", "city", "downtown"
+    ])
+    urban_note = ""
+    if is_urban:
+        urban_note = (
+            "\nIMPORTANT: The user is in an urban area. Note that tall buildings "
+            "and skyscrapers can block the western horizon where the crescent appears. "
+            "Suggest waterfront locations, rooftops, or elevated parks with clear western "
+            "views. Mention that the suggested spots may require driving outside the city."
+        )
+
+    moon_azimuth = moon_data.get('moon_azimuth_at_sunset', 'N/A')
+    # Convert azimuth to compass direction
+    compass = _azimuth_to_compass(moon_azimuth) if isinstance(moon_azimuth, (int, float)) else 'west'
 
     prompt = f"""You are MoonScout, a crescent moon observation assistant.
 
 The user asked: "Find best crescent moon viewing spots near {location_name} on {target_date}"
 
 Moon conditions on {target_date}:
-- Moon age: {moon_data.get('moon_age_hours', 'N/A')} hours
+- Moon age: {moon_data.get('moon_age_hours', 'N/A')} hours since new moon
 - Visibility category: {moon_data.get('visibility_category', 'N/A')} ({moon_data.get('message', '')})
-- Moon altitude at sunset: {moon_data.get('moon_altitude_at_sunset', 'N/A')}°
-- Lag time: {moon_data.get('lag_time_minutes', 'N/A')} minutes
-- Illumination: {moon_data.get('illumination_pct', 'N/A')}%
+- Moon altitude at sunset: {moon_data.get('moon_altitude_at_sunset', 'N/A')}° above horizon
+- Moon direction: {compass} (azimuth {moon_azimuth}°) — this is WHERE to look
+- Lag time: {moon_data.get('lag_time_minutes', 'N/A')} minutes between sunset and moonset
+- Illumination: {moon_data.get('illumination_pct', 'N/A')}% of moon surface lit
+{urban_note}
 
 Top {len(scored_results)} locations:
 {results_text}
 
 Write a clear, engaging response that:
 1. Briefly summarizes the moon conditions for that evening
-2. Presents each location as a ranked recommendation (#1, #2, #3)
-3. For each location: include the name, score, key weather stats, and 1-2 sentences explaining why it ranked where it did
-4. End with a practical tip for crescent observation
+2. Tell the user EXACTLY where to look: direction ({compass}, azimuth ~{moon_azimuth}°), how high above the horizon ({moon_data.get('moon_altitude_at_sunset', 'N/A')}°), and the observation window (from sunset until {moon_data.get('lag_time_minutes', 'N/A')} minutes later when the moon sets)
+3. Presents each location as a ranked recommendation (#1, #2, #3). Include: name, distance from user, score, cloud cover, humidity, and 1-2 sentences explaining the ranking
+4. Explain what the numbers mean in plain language (e.g., "cloud cover 97% means almost fully overcast", "score of 0.83 out of 1.0 means very good conditions")
+5. End with a practical tip for crescent observation
 
 Keep it informative but concise. Use plain language suitable for someone new to moon observation."""
 

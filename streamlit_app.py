@@ -75,10 +75,15 @@ st.markdown("""
 
     /* Input styling */
     .stTextInput > div > div > input {
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(240, 192, 64, 0.3);
-        color: #e0e0e0;
+        background: rgba(255, 255, 255, 0.10);
+        border: 1px solid rgba(240, 192, 64, 0.4);
+        color: #ffffff !important;
         border-radius: 8px;
+        font-size: 1.05rem;
+    }
+
+    .stTextInput > div > div > input::placeholder {
+        color: #888899 !important;
     }
 
     /* Button */
